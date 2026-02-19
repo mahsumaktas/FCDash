@@ -134,7 +134,7 @@ All RPC methods are fully typed — see `lib/types.ts` for the complete `RPCMeth
 
 ## Tech Stack
 
-- **Next.js 15** with App Router
+- **Next.js 16** with App Router
 - **React 19**
 - **TypeScript** (strict mode)
 - **Tailwind CSS v4**
