@@ -100,11 +100,22 @@ Browser                          Server (Next.js)                OpenClaw Gatewa
 └─────────────┘                 └──────────────────┘            └──────────────┘
 ```
 
+**This is a full-stack application**, not just a frontend. The Next.js server maintains a persistent WebSocket connection to the OpenClaw gateway and exposes two HTTP endpoints that any client can consume:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/rpc` | POST | JSON-RPC proxy — 37 whitelisted methods (chat, agents, sessions, etc.) |
+| `/api/events/gateway` | GET | SSE stream — real-time events (chat messages, health, approvals, etc.) |
+| `/api/health` | GET | Connection status and gateway info |
+
+This means you can build **any client** on top of FCDash's API — a macOS menu bar app, a mobile app, a CLI tool, or a custom integration. The bundled React UI is just one consumer of these endpoints.
+
 **Why this architecture?**
 - Gateway runs on a private network (often behind Tailscale)
 - Browser can't directly connect to the gateway WebSocket
-- Next.js server acts as an authenticated proxy
+- Next.js server acts as an authenticated proxy with rate limiting
 - SSE provides reliable real-time updates with auto-reconnection
+- Any HTTP client can use the API (not limited to the bundled web UI)
 
 ### Key Directories
 
