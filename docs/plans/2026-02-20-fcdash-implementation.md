@@ -13,7 +13,7 @@
 - Existing gateway client: `lib/gateway-client.ts` (port + improve)
 - Existing types: `lib/types.ts` (extend to all 91 methods)
 - Existing chat hook: `hooks/use-openclaw-chat.ts` (logic reference)
-- Gateway source: `/Users/mahsum/clawd/openclaw/src/gateway/server-methods/`
+- Gateway source: `&lt;openclaw-gateway&gt;/src/gateway/server-methods/`
 - Env config: `.env.local` (keep as-is)
 
 ---
@@ -29,7 +29,7 @@
 **Step 1: Create branch and clean workspace**
 
 ```bash
-cd /Users/mahsum/openclaw-dashboard
+cd .
 git checkout -b fcdash-rewrite
 ```
 
@@ -1123,5 +1123,5 @@ git add -A && git commit -m "feat: FCDash v1.0 - complete rewrite with full Open
 - **Independent after Phase 3:** Tasks 13-25 can be parallelized
 - **Each task:** 5-15 minutes for a skilled developer
 - **Existing code reference:** Check `main` branch for existing implementations to port
-- **Gateway API reference:** `/Users/mahsum/clawd/openclaw/src/gateway/server-methods/`
+- **Gateway API reference:** `&lt;openclaw-gateway&gt;/src/gateway/server-methods/`
 - **Env config:** `.env.local` already has gateway URL and token — keep it

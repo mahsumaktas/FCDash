@@ -31,6 +31,13 @@ type EventListener<E extends GatewayEventName = GatewayEventName> = (
   payload: GatewayEventMap[E]
 ) => void;
 
+/** Ed25519 device identity for secure control-ui auth */
+export type DeviceIdentity = {
+  deviceId: string;
+  publicKeyPem: string;
+  privateKeyPem: string;
+};
+
 export type GatewayClientOptions = {
   url: string;
   token?: string;
@@ -38,8 +45,12 @@ export type GatewayClientOptions = {
   clientName?: string;
   clientVersion?: string;
   instanceId?: string;
+  /** Device identity for signed auth (Node.js only) */
+  device?: DeviceIdentity;
   autoConnect?: boolean;
   rpcTimeoutMs?: number;
+  /** Extra headers for server-side WebSocket (Node.js only, ignored in browser) */
+  wsHeaders?: Record<string, string>;
   onStateChange?: (state: GatewayConnectionState) => void;
   onHello?: (hello: HelloOk) => void;
   onEvent?: (evt: EventFrame) => void;
@@ -47,6 +58,75 @@ export type GatewayClientOptions = {
 };
 
 const CONNECT_FAILED_CODE = 4008;
+
+// ─── Device Auth Helpers (Node.js only) ─────────────────────────────────────
+
+function buildCanonicalString(opts: {
+  deviceId: string;
+  clientId: string;
+  clientMode: string;
+  role: string;
+  scopes: string[];
+  signedAtMs: number;
+  token: string;
+  nonce?: string;
+}): string {
+  const version = opts.nonce ? "v2" : "v1";
+  const parts = [
+    version,
+    opts.deviceId,
+    opts.clientId,
+    opts.clientMode,
+    opts.role,
+    opts.scopes.join(","),
+    String(opts.signedAtMs),
+    opts.token,
+  ];
+  if (version === "v2") parts.push(opts.nonce ?? "");
+  return parts.join("|");
+}
+
+async function signDevice(
+  device: DeviceIdentity,
+  clientId: string,
+  clientMode: string,
+  role: string,
+  scopes: string[],
+  token: string,
+  nonce?: string,
+): Promise<{ id: string; publicKey: string; signature: string; signedAt: number; nonce?: string }> {
+  const { sign, createPublicKey } = await import("node:crypto");
+
+  const signedAt = Date.now();
+  const canonical = buildCanonicalString({
+    deviceId: device.deviceId,
+    clientId,
+    clientMode,
+    role,
+    scopes,
+    signedAtMs: signedAt,
+    token,
+    nonce,
+  });
+
+  const sig = sign(null, Buffer.from(canonical), device.privateKeyPem);
+  const signature = sig.toString("base64");
+
+  // Extract raw 32-byte Ed25519 public key from SPKI PEM
+  const pubKey = createPublicKey(device.publicKeyPem);
+  const der = pubKey.export({ type: "spki", format: "der" });
+  const rawPubKey = der.subarray(12).toString("base64");
+
+  return {
+    id: device.deviceId,
+    publicKey: rawPubKey,
+    signature,
+    signedAt,
+    ...(nonce ? { nonce } : {}),
+  };
+}
+
+// ─── Client ─────────────────────────────────────────────────────────────────
 
 export class GatewayClient {
   private ws: WebSocket | null = null;
@@ -58,7 +138,8 @@ export class GatewayClient {
   private connectSent = false;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private backoffMs = 800;
+  private backoffMs = 2_000;
+  private authFailCount = 0;
   private opts: Required<
     Pick<GatewayClientOptions, "url" | "rpcTimeoutMs">
   > &
@@ -166,7 +247,12 @@ export class GatewayClient {
     if (this.closed) return;
 
     try {
-      this.ws = new WebSocket(this.opts.url);
+      // Node.js native WebSocket accepts an options object with headers;
+      // browser WebSocket ignores the second arg when it's not protocols.
+      const headers = this.opts.wsHeaders;
+      this.ws = headers && typeof window === "undefined"
+        ? new WebSocket(this.opts.url, { headers } as unknown as string[])
+        : new WebSocket(this.opts.url);
     } catch (err) {
       this.error = err instanceof Error ? err : new Error(String(err));
       this.setState("error");
@@ -201,8 +287,11 @@ export class GatewayClient {
 
   private scheduleReconnect() {
     if (this.closed) return;
-    const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
+    // Auth failures get longer backoff to stay under gateway's 10 attempt/60s limit
+    const delay = this.authFailCount >= 3
+      ? Math.min(30_000, 10_000 * this.authFailCount)
+      : this.backoffMs;
+    this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
     this.reconnectTimer = setTimeout(() => {
       this.setState("connecting");
       this.doConnect();
@@ -227,7 +316,7 @@ export class GatewayClient {
     }, 750);
   }
 
-  private sendConnect() {
+  private async sendConnect() {
     if (this.connectSent) return;
     this.connectSent = true;
     if (this.connectTimer) {
@@ -235,37 +324,64 @@ export class GatewayClient {
       this.connectTimer = null;
     }
 
+    const clientId = this.opts.clientName ?? "openclaw-control-ui";
+    const clientMode = "webchat";
+    const role = "operator";
+    const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
+    const tokenValue = this.opts.token ?? "";
+
     const auth =
       this.opts.token || this.opts.password
         ? { token: this.opts.token, password: this.opts.password }
         : undefined;
 
+    // Build device identity with Ed25519 signature (Node.js server-side only)
+    let deviceField: { id: string; publicKey: string; signature: string; signedAt: number; nonce?: string } | undefined;
+    if (this.opts.device) {
+      try {
+        deviceField = await signDevice(
+          this.opts.device,
+          clientId,
+          clientMode,
+          role,
+          scopes,
+          tokenValue,
+          this.connectNonce ?? undefined,
+        );
+      } catch (err) {
+        console.error("[gateway] device signing failed:", err);
+      }
+    }
+
     const params = {
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: this.opts.clientName ?? "openclaw-control-ui",
+        id: clientId,
         version: this.opts.clientVersion ?? "1.0.0",
-        platform: typeof navigator !== "undefined" ? navigator.platform : "web",
-        mode: "webchat",
+        platform: typeof navigator !== "undefined" ? navigator.platform : "node",
+        mode: clientMode,
         instanceId: this.opts.instanceId,
       },
-      role: "operator",
-      scopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      role,
+      scopes,
+      device: deviceField,
       caps: [],
       auth,
       locale: typeof navigator !== "undefined" ? navigator.language : "en",
-      userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
+      userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "node",
     };
 
     this.request<HelloOk>("connect", params)
       .then((hello) => {
         this.hello = hello;
-        this.backoffMs = 800;
+        this.backoffMs = 2_000;
+        this.authFailCount = 0;
         this.setState("connected");
         this.opts.onHello?.(hello);
       })
       .catch((err) => {
+        this.authFailCount++;
         this.error = err instanceof Error ? err : new Error(String(err));
         this.setState("error");
         this.opts.onError?.(this.error);

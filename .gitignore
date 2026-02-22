@@ -22,7 +22,16 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files
+.env
 .env*.local
+
+# debug / test artifacts
+logs/
+test-rpc.js
+.playwright-mcp/
+
+# claude code
+.claude/
 
 # typescript
 *.tsbuildinfo

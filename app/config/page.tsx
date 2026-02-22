@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
-import { useGatewayStore } from "@/stores/gateway";
-import { useIsConnected } from "@/hooks/use-gateway";
+import { useState, useEffect, useMemo } from "react";
+import { useApiQuery } from "@/hooks/use-api";
+import { api } from "@/lib/api-client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,133 +13,47 @@ import {
   Settings,
   Search,
   Save,
-  ChevronDown,
-  ChevronRight,
-  Eye,
-  EyeOff,
+  FileText,
+  AlertTriangle,
+  AlertCircle,
+  CheckCircle,
   WifiOff,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
-import type { ConfigEntry } from "@/lib/types";
-
-const SENSITIVE_PATTERNS = ["token", "password", "secret", "key", "api_key", "apikey", "auth"];
-
-function isSensitiveKey(key: string): boolean {
-  const lower = key.toLowerCase();
-  return SENSITIVE_PATTERNS.some((p) => lower.includes(p));
-}
-
-function getSection(key: string): string {
-  const dot = key.indexOf(".");
-  return dot > 0 ? key.slice(0, dot) : "general";
-}
 
 export default function ConfigPage() {
-  const rpc = useGatewayStore((s) => s.rpc);
-  const isConnected = useIsConnected();
+  const { data, loading, error, refetch } = useApiQuery({
+    method: "config.get",
+    pollInterval: 0,
+  });
 
-  const [entries, setEntries] = useState<ConfigEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
-  const [editingKey, setEditingKey] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
+  const rawConfig = data?.raw ?? "";
+  const configHash = data?.hash ?? "";
+  const configPath = data?.path ?? "";
+  const configExists = data?.exists ?? false;
+  const configValid = data?.valid ?? true;
+  const issues = data?.issues ?? [];
+  const warnings = data?.warnings ?? [];
+
+  const [editedConfig, setEditedConfig] = useState<string>("");
   const [saving, setSaving] = useState(false);
-  const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
 
-  const fetchConfig = useCallback(async () => {
-    if (!isConnected) return;
-    try {
-      const result = await rpc("config.get");
-      if (Array.isArray(result)) {
-        setEntries(result);
-        // Expand all sections initially
-        const sections = new Set(result.map((e) => getSection(e.key)));
-        setExpandedSections(sections);
-      }
-    } catch {
-      toast.error("Failed to load config");
-    } finally {
-      setLoading(false);
-    }
-  }, [isConnected, rpc]);
-
+  // Sync editedConfig when fresh data arrives (initial load, reload, after save)
   useEffect(() => {
-    fetchConfig();
-  }, [fetchConfig]);
-
-  const filtered = useMemo(() => {
-    if (!search.trim()) return entries;
-    const q = search.toLowerCase();
-    return entries.filter(
-      (e) =>
-        e.key.toLowerCase().includes(q) ||
-        e.description?.toLowerCase().includes(q) ||
-        String(e.value).toLowerCase().includes(q)
-    );
-  }, [entries, search]);
-
-  // Group by section
-  const grouped = useMemo(() => {
-    const groups: Record<string, ConfigEntry[]> = {};
-    for (const entry of filtered) {
-      const section = getSection(entry.key);
-      if (!groups[section]) groups[section] = [];
-      groups[section].push(entry);
+    if (data?.raw != null) {
+      setEditedConfig(data.raw);
     }
-    return Object.entries(groups).sort(([a], [b]) => a.localeCompare(b));
-  }, [filtered]);
-
-  const toggleSection = (section: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(section)) {
-        next.delete(section);
-      } else {
-        next.add(section);
-      }
-      return next;
-    });
-  };
-
-  const startEdit = (entry: ConfigEntry) => {
-    setEditingKey(entry.key);
-    const val = entry.value;
-    if (typeof val === "object") {
-      setEditValue(JSON.stringify(val, null, 2));
-    } else {
-      setEditValue(String(val ?? ""));
-    }
-  };
+  }, [data?.raw]);
 
   const handleSave = async () => {
-    if (!editingKey) return;
     setSaving(true);
     try {
-      let parsedValue: unknown = editValue;
-      // Try to parse as JSON for complex types
-      try {
-        parsedValue = JSON.parse(editValue);
-      } catch {
-        // Keep as string if not valid JSON
-        // Also try to parse numbers and booleans
-        if (editValue === "true") parsedValue = true;
-        else if (editValue === "false") parsedValue = false;
-        else if (editValue !== "" && !isNaN(Number(editValue)))
-          parsedValue = Number(editValue);
-      }
-
-      await rpc("config.set", { key: editingKey, value: parsedValue });
-      toast.success(`Config "${editingKey}" updated`);
-
-      // Update local state
-      setEntries((prev) =>
-        prev.map((e) =>
-          e.key === editingKey ? { ...e, value: parsedValue } : e
-        )
-      );
-      setEditingKey(null);
-      setEditValue("");
+      await api.rpc("config.set", { raw: editedConfig, baseHash: configHash });
+      toast.success("Configuration saved");
+      // Re-fetch to get the updated hash and validation state
+      await refetch();
     } catch {
       toast.error("Failed to save config");
     } finally {
@@ -147,57 +61,165 @@ export default function ConfigPage() {
     }
   };
 
-  const toggleReveal = (key: string) => {
-    setRevealedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  };
-
-  const displayValue = (entry: ConfigEntry): string => {
-    if (isSensitiveKey(entry.key) && !revealedKeys.has(entry.key)) {
-      return "********";
+  const handleFormat = () => {
+    try {
+      const parsed = JSON.parse(editedConfig);
+      setEditedConfig(JSON.stringify(parsed, null, 2));
+    } catch {
+      toast.error("Cannot format: invalid JSON");
     }
-    if (entry.value === null || entry.value === undefined) return "";
-    if (typeof entry.value === "object") return JSON.stringify(entry.value);
-    return String(entry.value);
   };
 
-  if (!isConnected) {
+  const hasChanges = editedConfig !== rawConfig;
+
+  // Filter lines of the config for search
+  const displayConfig = useMemo(() => {
+    if (!search.trim()) return editedConfig;
+    const q = search.toLowerCase();
+    const lines = editedConfig.split("\n");
+    const filtered = lines.filter((line) => line.toLowerCase().includes(q));
+    return filtered.join("\n");
+  }, [editedConfig, search]);
+
+  const isSearching = search.trim().length > 0;
+
+  if (error && !data) {
     return (
       <div className="p-6 flex flex-col items-center justify-center h-full text-muted-foreground">
         <WifiOff className="w-16 h-16 mb-4 opacity-20" />
-        <h2 className="text-lg font-medium mb-1">Not Connected</h2>
-        <p className="text-sm">Waiting for gateway connection...</p>
+        <h2 className="text-lg font-medium mb-1">Unable to Load Configuration</h2>
+        <p className="text-sm">{error.message}</p>
+        <Button variant="outline" size="sm" className="mt-3" onClick={refetch}>
+          Try Again
+        </Button>
       </div>
     );
   }
 
   return (
     <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Configuration</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          View and edit gateway configuration ({entries.length} entries)
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">Configuration</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            View and edit gateway configuration
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={refetch}
+            disabled={loading}
+          >
+            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+            Reload
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleFormat}
+            disabled={loading || isSearching}
+          >
+            Format
+          </Button>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={saving || !hasChanges || isSearching}
+          >
+            <Save className="w-3.5 h-3.5 mr-1.5" />
+            {saving ? "Saving..." : "Save"}
+          </Button>
+        </div>
       </div>
+
+      {/* Status bar */}
+      {!loading && (
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          {configPath && (
+            <div className="flex items-center gap-1.5 text-muted-foreground">
+              <FileText className="w-3.5 h-3.5" />
+              <span className="font-mono text-xs">{configPath}</span>
+            </div>
+          )}
+          {configExists ? (
+            configValid ? (
+              <Badge variant="secondary" className="gap-1">
+                <CheckCircle className="w-3 h-3 text-green-500" />
+                Valid
+              </Badge>
+            ) : (
+              <Badge variant="destructive" className="gap-1">
+                <AlertCircle className="w-3 h-3" />
+                Invalid
+              </Badge>
+            )
+          ) : (
+            <Badge variant="outline" className="gap-1 text-muted-foreground">
+              No config file
+            </Badge>
+          )}
+          {hasChanges && (
+            <Badge variant="outline" className="gap-1 text-yellow-500 border-yellow-500/30">
+              Unsaved changes
+            </Badge>
+          )}
+        </div>
+      )}
+
+      {/* Issues */}
+      {issues.length > 0 && (
+        <Card className="border-destructive/50">
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm flex items-center gap-2 text-destructive">
+              <AlertCircle className="w-4 h-4" />
+              Issues ({issues.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-1">
+            {issues.map((issue, i) => (
+              <div key={i} className="text-xs font-mono">
+                <span className="text-muted-foreground">{issue.path}:</span>{" "}
+                {issue.message}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Warnings */}
+      {warnings.length > 0 && (
+        <Card className="border-yellow-500/50">
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm flex items-center gap-2 text-yellow-500">
+              <AlertTriangle className="w-4 h-4" />
+              Warnings ({warnings.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-1">
+            {warnings.map((warning, i) => (
+              <div key={i} className="text-xs font-mono">
+                <span className="text-muted-foreground">{warning.path}:</span>{" "}
+                {warning.message}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Search */}
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
-          placeholder="Search config keys..."
+          placeholder="Search config..."
           className="pl-9"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
 
+      {/* Config editor */}
       {loading ? (
         <div className="space-y-4">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -208,138 +230,44 @@ export default function ConfigPage() {
               <CardContent className="space-y-2">
                 <Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-full" />
               </CardContent>
             </Card>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
+      ) : !configExists && !rawConfig ? (
         <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
           <Settings className="w-16 h-16 mb-4 opacity-20" />
-          <p className="text-sm">
-            {search ? "No config entries match your search." : "No configuration entries found."}
+          <p className="text-sm">No configuration file found.</p>
+          <p className="text-xs mt-1">
+            Create a config file at <span className="font-mono">{configPath || "the expected path"}</span> to get started.
           </p>
         </div>
+      ) : isSearching ? (
+        <Card>
+          <CardHeader className="py-3">
+            <CardTitle className="text-sm text-muted-foreground">
+              Filtered results ({displayConfig.split("\n").length} lines matching)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <pre className="font-mono text-xs whitespace-pre-wrap bg-muted/30 rounded p-4 overflow-auto max-h-[70vh]">
+              {displayConfig || "No matching lines."}
+            </pre>
+          </CardContent>
+        </Card>
       ) : (
-        <div className="space-y-4">
-          {grouped.map(([section, sectionEntries]) => {
-            const isExpanded = expandedSections.has(section);
-            return (
-              <Card key={section}>
-                <CardHeader
-                  className="cursor-pointer select-none"
-                  onClick={() => toggleSection(section)}
-                >
-                  <CardTitle className="text-base flex items-center gap-2">
-                    {isExpanded ? (
-                      <ChevronDown className="w-4 h-4" />
-                    ) : (
-                      <ChevronRight className="w-4 h-4" />
-                    )}
-                    <span className="capitalize">{section}</span>
-                    <Badge variant="secondary" className="text-xs">
-                      {sectionEntries.length}
-                    </Badge>
-                  </CardTitle>
-                </CardHeader>
-                {isExpanded && (
-                  <CardContent className="space-y-3 border-t border-border pt-4">
-                    {sectionEntries.map((entry) => {
-                      const isEditing = editingKey === entry.key;
-                      const sensitive = isSensitiveKey(entry.key);
-                      const isComplex = typeof entry.value === "object" && entry.value !== null;
-
-                      return (
-                        <div key={entry.key} className="space-y-1.5 pb-3 border-b border-border/50 last:border-0 last:pb-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-mono font-medium">{entry.key}</span>
-                            {sensitive && (
-                              <Badge variant="outline" className="text-xs text-yellow-500 border-yellow-500/30">
-                                Sensitive
-                              </Badge>
-                            )}
-                            {entry.type && (
-                              <Badge variant="outline" className="text-xs">
-                                {entry.type}
-                              </Badge>
-                            )}
-                          </div>
-                          {entry.description && (
-                            <p className="text-xs text-muted-foreground">{entry.description}</p>
-                          )}
-                          {isEditing ? (
-                            <div className="space-y-2">
-                              {isComplex ? (
-                                <Textarea
-                                  className="font-mono text-xs min-h-[80px]"
-                                  value={editValue}
-                                  onChange={(e) => setEditValue(e.target.value)}
-                                />
-                              ) : (
-                                <Input
-                                  className="font-mono text-sm"
-                                  value={editValue}
-                                  onChange={(e) => setEditValue(e.target.value)}
-                                  type={sensitive && !revealedKeys.has(entry.key) ? "password" : "text"}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") handleSave();
-                                    if (e.key === "Escape") {
-                                      setEditingKey(null);
-                                      setEditValue("");
-                                    }
-                                  }}
-                                />
-                              )}
-                              <div className="flex gap-2">
-                                <Button size="sm" onClick={handleSave} disabled={saving}>
-                                  <Save className="w-3 h-3" />
-                                  {saving ? "Saving..." : "Save"}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => {
-                                    setEditingKey(null);
-                                    setEditValue("");
-                                  }}
-                                >
-                                  Cancel
-                                </Button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <div
-                                className="flex-1 text-sm font-mono bg-muted/30 rounded px-2 py-1 cursor-pointer hover:bg-muted/50 transition-colors truncate"
-                                onClick={() => startEdit(entry)}
-                                title="Click to edit"
-                              >
-                                {displayValue(entry) || <span className="text-muted-foreground italic">empty</span>}
-                              </div>
-                              {sensitive && (
-                                <Button
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  onClick={() => toggleReveal(entry.key)}
-                                  title={revealedKeys.has(entry.key) ? "Hide" : "Reveal"}
-                                >
-                                  {revealedKeys.has(entry.key) ? (
-                                    <EyeOff className="w-3 h-3" />
-                                  ) : (
-                                    <Eye className="w-3 h-3" />
-                                  )}
-                                </Button>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </CardContent>
-                )}
-              </Card>
-            );
-          })}
-        </div>
+        <Card>
+          <CardContent className="pt-6">
+            <Textarea
+              className="font-mono text-xs min-h-[500px] resize-y w-full"
+              value={editedConfig}
+              onChange={(e) => setEditedConfig(e.target.value)}
+              spellCheck={false}
+              placeholder="Paste or type your JSON configuration here..."
+            />
+          </CardContent>
+        </Card>
       )}
     </div>
   );

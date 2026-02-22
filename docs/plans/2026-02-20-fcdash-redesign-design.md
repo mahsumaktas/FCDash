@@ -273,7 +273,7 @@ Update `types.ts` to cover ALL 91 gateway methods:
 
 ## 9. Project Setup
 
-- Project directory: `/Users/mahsum/openclaw-dashboard/` (overwrite existing)
+- Project directory: `./` (overwrite existing)
 - Package name: `fcdash`
 - Reuse existing `.env.local` (gateway URL + token)
 - Reuse existing `gateway-client.ts` as base (port + improve)

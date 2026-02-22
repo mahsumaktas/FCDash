@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useGatewayStore } from "@/stores/gateway";
+import { useGatewaySSEStore } from "@/stores/gateway-sse";
+import { api } from "@/lib/api-client";
 import type { AgentSummary } from "@/lib/types";
 import {
   Dialog,
@@ -21,8 +22,7 @@ interface AgentSelectorProps {
 }
 
 export function AgentSelector({ open, onClose, onSelect }: AgentSelectorProps) {
-  const rpc = useGatewayStore((s) => s.rpc);
-  const isConnected = useGatewayStore((s) => s.state === "connected");
+  const isConnected = useGatewaySSEStore((s) => s.gatewayConnected);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [defaultId, setDefaultId] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -31,7 +31,7 @@ export function AgentSelector({ open, onClose, onSelect }: AgentSelectorProps) {
     if (!isConnected) return;
     setLoading(true);
     try {
-      const result = await rpc("agents.list");
+      const result = await api.rpc("agents.list");
       if (result && typeof result === "object") {
         setAgents(result.agents ?? []);
         setDefaultId(result.defaultId ?? "");
@@ -40,7 +40,7 @@ export function AgentSelector({ open, onClose, onSelect }: AgentSelectorProps) {
       /* ignore */
     }
     setLoading(false);
-  }, [rpc, isConnected]);
+  }, [isConnected]);
 
   useEffect(() => {
     if (open && isConnected) {

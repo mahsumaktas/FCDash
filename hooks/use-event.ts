@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef } from "react";
-import { useGatewayStore } from "@/stores/gateway";
+import { useGatewaySSEStore } from "@/stores/gateway-sse";
 import type { GatewayEventName, GatewayEventMap } from "@/lib/types";
 
 export function useEvent<E extends GatewayEventName>(
@@ -8,13 +8,13 @@ export function useEvent<E extends GatewayEventName>(
   callback: (payload: GatewayEventMap[E]) => void,
   enabled = true
 ) {
-  const subscribe = useGatewayStore((s) => s.subscribe);
-  const isConnected = useGatewayStore((s) => s.state === "connected");
+  const subscribe = useGatewaySSEStore((s) => s.subscribe);
+  const isConnected = useGatewaySSEStore((s) => s.gatewayConnected);
   const cbRef = useRef(callback);
   cbRef.current = callback;
 
   useEffect(() => {
     if (!isConnected || !enabled) return;
-    return subscribe(event, (payload) => cbRef.current(payload));
+    return subscribe(event, (payload) => cbRef.current(payload as GatewayEventMap[E]));
   }, [isConnected, enabled, event, subscribe]);
 }

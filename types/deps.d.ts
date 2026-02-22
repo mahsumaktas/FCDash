@@ -236,10 +236,15 @@ declare module "recharts" {
     className?: string;
     children?: ReactNode;
   };
+  export const AreaChart: FC<ChartProps>;
+  export const Area: FC<ChartProps>;
   export const BarChart: FC<ChartProps>;
   export const Bar: FC<ChartProps>;
   export const LineChart: FC<ChartProps>;
   export const Line: FC<ChartProps>;
+  export const PieChart: FC<ChartProps>;
+  export const Pie: FC<ChartProps>;
+  export const Cell: FC<ChartProps>;
   export const XAxis: FC<ChartProps>;
   export const YAxis: FC<ChartProps>;
   export const CartesianGrid: FC<ChartProps>;

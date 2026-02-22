@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { useGatewayStore } from "@/stores/gateway";
-import { useIsConnected } from "@/hooks/use-gateway";
+import { useApiQuery } from "@/hooks/use-api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -46,62 +45,26 @@ function getLineColor(line: string): string {
 }
 
 export default function LogsPage() {
-  const rpc = useGatewayStore((s) => s.rpc);
-  const isConnected = useIsConnected();
-
   const [lines, setLines] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
   const [paused, setPaused] = useState(false);
   const [search, setSearch] = useState("");
   const [levelFilter, setLevelFilter] = useState<LogLevel>("ALL");
   const [autoScroll, setAutoScroll] = useState(true);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastFetchRef = useRef(false);
 
-  const fetchLogs = useCallback(async () => {
-    if (!isConnected || lastFetchRef.current) return;
-    lastFetchRef.current = true;
-    try {
-      const result = await rpc("logs.tail", { lines: 200 });
-      if (Array.isArray(result)) {
-        setLines(result);
-      }
-    } catch {
-      // Silently handle — logs may not be available
-    } finally {
-      setLoading(false);
-      lastFetchRef.current = false;
-    }
-  }, [isConnected, rpc]);
+  const { data: logsData, loading, error, refetch } = useApiQuery({
+    method: "logs.tail",
+    params: { limit: 500 },
+    pollInterval: paused ? 0 : 3000,
+  });
 
-  // Initial fetch
+  // Sync lines from API data
   useEffect(() => {
-    fetchLogs();
-  }, [fetchLogs]);
-
-  // Polling
-  useEffect(() => {
-    if (paused || !isConnected) {
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-      return;
+    if (logsData?.lines) {
+      setLines(logsData.lines);
     }
-
-    pollTimerRef.current = setInterval(() => {
-      fetchLogs();
-    }, 3000);
-
-    return () => {
-      if (pollTimerRef.current) {
-        clearInterval(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
-  }, [paused, isConnected, fetchLogs]);
+  }, [logsData]);
 
   // Auto-scroll
   useEffect(() => {
@@ -157,12 +120,15 @@ export default function LogsPage() {
     setLines([]);
   };
 
-  if (!isConnected) {
+  if (error && !lines.length && !loading) {
     return (
       <div className="p-6 flex flex-col items-center justify-center h-full text-muted-foreground">
         <WifiOff className="w-16 h-16 mb-4 opacity-20" />
-        <h2 className="text-lg font-medium mb-1">Not Connected</h2>
-        <p className="text-sm">Waiting for gateway connection...</p>
+        <h2 className="text-lg font-medium mb-1">Unable to Load Logs</h2>
+        <p className="text-sm">{error.message}</p>
+        <Button variant="outline" size="sm" className="mt-3" onClick={refetch}>
+          Try Again
+        </Button>
       </div>
     );
   }

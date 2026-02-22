@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, MessageSquare, Bot, List, Shield,
   Cpu, Radio, Wrench, Clock, Server, Mic, Settings,
-  ScrollText, BarChart3, type LucideIcon,
+  ScrollText, BarChart3, Layers, Kanban, type LucideIcon,
 } from "lucide-react";
 
 export type NavItem = {
@@ -17,7 +17,9 @@ export const NAV_ITEMS: NavItem[] = [
   { href: "/agents", label: "Agents", icon: Bot },
   { href: "/sessions", label: "Sessions", icon: List },
   { href: "/approvals", label: "Approvals", icon: Shield, badge: true },
+  { href: "/ops", label: "Ops Board", icon: Kanban },
   { href: "/models", label: "Models", icon: Cpu },
+  { href: "/providers", label: "Providers", icon: Layers },
   { href: "/channels", label: "Channels", icon: Radio },
   { href: "/skills", label: "Skills", icon: Wrench },
   { href: "/cron", label: "Cron", icon: Clock },

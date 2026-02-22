@@ -111,7 +111,11 @@ export type ChatSendParams = {
   message: string;
   thinking?: string;
   deliver?: boolean;
-  attachments?: unknown[];
+  attachments?: Array<{
+    type: string;
+    name: string;
+    data: string;
+  }>;
   timeoutMs?: number;
   idempotencyKey: string;
 };
@@ -363,11 +367,20 @@ export type ChannelDetail = {
   accountId?: string;
 };
 
+export type ChannelAccount = {
+  accountId: string;
+  displayName?: string;
+  [key: string]: unknown;
+};
+
 export type ChannelsStatusResult = {
   channelOrder?: string[];
   channelLabels?: Record<string, string>;
+  channelDetailLabels?: Record<string, string>;
   channelMeta?: ChannelMeta[];
   channels?: Record<string, ChannelDetail>;
+  channelAccounts?: Record<string, ChannelAccount[]>;
+  channelDefaultAccountId?: Record<string, string>;
 };
 
 // ─── Cron ───────────────────────────────────────────────────────────────────
@@ -433,6 +446,70 @@ export type ExecApprovalEvent = {
   agentId?: string;
   sessionKey?: string;
   timestamp?: number;
+  request?: {
+    command?: string;
+    cwd?: string;
+    host?: string;
+    security?: string;
+    ask?: string;
+    agentId?: string;
+    resolvedPath?: string;
+    sessionKey?: string;
+  };
+  createdAtMs?: number;
+  expiresAtMs?: number;
+};
+
+// ─── RPC Result Wrappers (gateway always returns objects, never bare arrays) ─
+
+export type SessionsListResult = {
+  ts: number;
+  path: string;
+  count: number;
+  defaults: {
+    modelProvider: string | null;
+    model: string | null;
+    contextTokens: number | null;
+  };
+  sessions: SessionSummary[];
+};
+
+export type ModelsListResult = {
+  models: ModelChoice[];
+};
+
+export type CronListResult = {
+  jobs: CronJob[];
+};
+
+export type NodesListResult = {
+  ts: number;
+  nodes: NodeInfo[];
+};
+
+export type DevicePairListResult = {
+  pending: DeviceInfo[];
+  paired: DeviceInfo[];
+};
+
+export type LogsTailResult = {
+  file: string;
+  cursor: number;
+  size: number;
+  lines: string[];
+  truncated: boolean;
+  reset: boolean;
+};
+
+export type ConfigGetResult = {
+  path: string;
+  exists: boolean;
+  raw: string | null;
+  config: unknown;
+  valid: boolean;
+  hash: string;
+  issues: Array<{ path: string; message: string }>;
+  warnings: Array<{ path: string; message: string }>;
 };
 
 // ─── Gateway Connection State ───────────────────────────────────────────────
@@ -451,7 +528,8 @@ export type RPCMethodMap = {
   "health": [void, HealthStatus];
   "status": [void, unknown];
   "usage.status": [void, unknown];
-  "usage.cost": [void, unknown];
+  "usage.cost": [{ days?: number } | void, unknown];
+  "sessions.usage": [{ limit?: number } | void, unknown];
 
   // Chat
   "chat.send": [ChatSendParams, { runId: string }];
@@ -476,7 +554,7 @@ export type RPCMethodMap = {
   "agents.files.set": [{ agentId: string; file: string; content: string }, void];
 
   // Sessions
-  "sessions.list": [SessionsListParams | void, SessionSummary[]];
+  "sessions.list": [SessionsListParams | void, SessionsListResult];
   "sessions.preview": [{ key: string }, unknown];
   "sessions.patch": [SessionsPatchParams, void];
   "sessions.reset": [{ key: string }, void];
@@ -485,30 +563,30 @@ export type RPCMethodMap = {
   "sessions.resolve": [{ key: string }, { sessionKey: string; agentId: string }];
 
   // Models
-  "models.list": [void, ModelChoice[]];
+  "models.list": [void, ModelsListResult];
 
   // TTS
   "tts.status": [void, TTSStatus];
-  "tts.providers": [void, TTSProviderInfo[]];
+  "tts.providers": [void, { providers: TTSProviderInfo[] }];
   "tts.enable": [void, void];
   "tts.disable": [void, void];
   "tts.setProvider": [{ provider: string; voice?: string }, void];
   "tts.convert": [{ text: string }, { audio: string }];
 
   // Nodes
-  "node.list": [void, NodeInfo[]];
+  "node.list": [void, NodesListResult];
   "node.describe": [{ nodeId: string }, NodeInfo];
   "node.rename": [{ nodeId: string; displayName: string }, void];
   "node.invoke": [NodeInvokeParams, unknown];
 
   // Node pairing
   "node.pair.request": [{ displayName?: string }, { nodeId: string }];
-  "node.pair.list": [void, Array<{ nodeId: string; displayName?: string; status: string }>];
+  "node.pair.list": [void, { pending: Array<{ nodeId: string; displayName?: string; status: string }>; paired: Array<{ nodeId: string; displayName?: string; status: string }> }];
   "node.pair.approve": [{ nodeId: string }, void];
   "node.pair.reject": [{ nodeId: string }, void];
 
   // Device pairing
-  "device.pair.list": [void, DeviceInfo[]];
+  "device.pair.list": [void, DevicePairListResult];
   "device.pair.approve": [{ deviceId: string }, void];
   "device.pair.reject": [{ deviceId: string }, void];
   "device.pair.remove": [{ deviceId: string }, void];
@@ -519,7 +597,7 @@ export type RPCMethodMap = {
 
   // Skills
   "skills.status": [void, { skills: SkillInfo[]; workspaceDir?: string; managedSkillsDir?: string }];
-  "skills.bins": [void, SkillBin[]];
+  "skills.bins": [void, { bins: string[] }];
   "skills.install": [{ id: string }, void];
   "skills.update": [{ id: string }, void];
 
@@ -532,18 +610,18 @@ export type RPCMethodMap = {
   "web.login.wait": [{ timeoutMs?: number } | void, { connected: boolean; message?: string }];
 
   // Cron
-  "cron.list": [void, CronJob[]];
+  "cron.list": [void, CronListResult];
   "cron.status": [void, unknown];
   "cron.add": [Omit<CronJob, "id" | "lastRun" | "nextRun" | "lastResult">, CronJob];
   "cron.update": [Partial<CronJob> & { id: string }, CronJob];
   "cron.remove": [{ id: string }, void];
   "cron.run": [{ id: string }, CronRunResult];
-  "cron.runs": [{ id: string; limit?: number }, CronRunResult[]];
+  "cron.runs": [{ id: string; limit?: number }, { entries: CronRunResult[] }];
 
   // Config
-  "config.get": [{ key?: string } | void, ConfigEntry | ConfigEntry[]];
-  "config.set": [{ key: string; value: unknown }, void];
-  "config.schema": [void, unknown];
+  "config.get": [{ key?: string } | void, ConfigGetResult];
+  "config.set": [{ raw: string; baseHash: string }, void];
+  "config.schema": [void, { schema: unknown; uiHints?: unknown; version?: string }];
   "config.apply": [void, void];
   "config.patch": [{ patch: Record<string, unknown> }, void];
 
@@ -553,7 +631,7 @@ export type RPCMethodMap = {
   "exec.approvals.set": [Partial<ExecApprovalSettings>, void];
 
   // Logs
-  "logs.tail": [{ lines?: number; filter?: string } | void, string[]];
+  "logs.tail": [{ limit?: number; cursor?: number; maxBytes?: number } | void, LogsTailResult];
 
   // Talk mode
   "talk.config": [void, unknown];
